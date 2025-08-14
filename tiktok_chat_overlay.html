@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Chat Overlay - OBS/Streaming</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: transparent; /* FONDO COMPLETAMENTE TRANSPARENTE */
+            color: white;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .chat-overlay {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            width: 350px; /* MÁS DELGADO */
+            height: 400px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px; /* MENOS ESPACIO */
+            pointer-events: none;
+        }
+
+        .message {
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(8px);
+            border-radius: 8px; /* MÁS DELGADO */
+            padding: 8px 12px; /* MÁS COMPACTO */
+            animation: slideInLeft 0.4s ease-out;
+            pointer-events: auto;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            /* SIN BORDE IZQUIERDO DE COLOR */
+            position: relative;
+        }
+
+        .message-content {
+            color: #ffffff;
+            font-size: 0.85rem; /* MÁS PEQUEÑO */
+            line-height: 1.3;
+            word-wrap: break-word;
+            /* TODO EN UNA SOLA LÍNEA COMO EL TERMINAL */
+        }
+
+        /* QUITAR HEADER SEPARADO - TODO EN UNA LÍNEA */
+        .message-header {
+            display: none; /* ELIMINAR HEADER */
+        }
+
+        /* PATITO EMPUJADOR */
+        .duck-pusher {
+            position: fixed;
+            bottom: 50px;
+            left: -100px; /* Empieza fuera de pantalla */
+            width: 80px;
+            height: 80px;
+            z-index: 1001;
+            pointer-events: none;
+            opacity: 0;
+        }
+
+        .duck-pusher img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            /* Enfocar más en el centro para que se vea más grande */
+            object-position: center;
+            transform: scale(1.5); /* Hacer la imagen más grande */
+            filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));
+        }
+
+        /* ETIQUETA DE USUARIO ARRIBA DEL PATITO */
+        .duck-user-label {
+            position: absolute;
+            top: -40px; /* Arriba del patito */
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: #ffeb3b; /* Mismo color amarillo del usuario */
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            white-space: nowrap;
+            border: 2px solid #ff0050;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            opacity: 0;
+        }
+
+        /* Animación del patito empujando */
+        @keyframes duckPush {
+            0% {
+                left: -100px;
+                opacity: 0;
+            }
+            15% {
+                opacity: 1;
+            }
+            50% {
+                left: 50vw; /* Hasta la mitad del navegador */
+                opacity: 1;
+            }
+            85% {
+                opacity: 1;
+            }
+            100% {
+                left: 100vw; /* Sale por el otro lado */
+                opacity: 0;
+            }
+        }
+
+        .duck-pusher.pushing {
+            animation: duckPush 5s ease-in-out; /* MÁS LENTO: de 3s a 5s */
+        }
+
+        /* Animación de la etiqueta del usuario */
+        @keyframes userLabelShow {
+            0% {
+                opacity: 0;
+                transform: translateX(-50%) translateY(-10px) scale(0.8);
+            }
+            15% {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0) scale(1);
+            }
+            85% {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0) scale(1);
+            }
+            100% {
+                opacity: 0;
+                transform: translateX(-50%) translateY(-10px) scale(0.8);
+            }
+        }
+
+        .duck-user-label.showing {
+            animation: userLabelShow 5s ease-in-out; /* MÁS LENTO: misma duración que el patito */
+        }
+
+        /* Animación del mensaje siendo empujado */
+        @keyframes messagePushed {
+            0% {
+                transform: translateX(-100px);
+                opacity: 0;
+            }
+            30% {
+                transform: translateX(-50px);
+                opacity: 0.5;
+            }
+            60% {
+                transform: translateX(20px);
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .message.being-pushed {
+            animation: messagePushed 2.5s ease-out;
+        }
+
+        @keyframes slideInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeOut {
+            from {
+                opacity: 1;
+                transform: translateX(0);
+            }
+            to {
+                opacity: 0;
+                transform: translateX(-50px);
+            }
+        }
+
+        .message.fade-out {
+            animation: fadeOut 0.5s ease-in forwards;
+        }
+
+        /* Panel de prueba (se puede ocultar para producción) */
+        .test-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            pointer-events: auto;
+            z-index: 1000;
+        }
+
+        .test-panel h3 {
+            color: #fff;
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+        }
+
+        .test-btn {
+            display: block;
+            width: 100%;
+            padding: 8px 12px;
+            margin-bottom: 6px;
+            background: linear-gradient(45deg, #ff0050, #ff4081);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s ease;
+        }
+
+        .test-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(255, 0, 80, 0.3);
+        }
+
+        .test-btn:active {
+            transform: translateY(0);
+        }
+
+        /* ANIMACIÓN CENTRAL DE CELEBRACIÓN */
+        .celebration-animation {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            width: 300px;
+            height: 300px;
+            z-index: 2000;
+            pointer-events: none;
+            opacity: 0;
+        }
+
+        .celebration-animation img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.5));
+        }
+
+        .celebration-animation.celebrating {
+            animation: celebrationShow 4s ease-in-out;
+        }
+
+        /* Animación de celebración */
+        @keyframes celebrationShow {
+            0% {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0) rotate(-180deg);
+            }
+            15% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1.2) rotate(0deg);
+            }
+            25% {
+                transform: translate(-50%, -50%) scale(1) rotate(10deg);
+            }
+            35% {
+                transform: translate(-50%, -50%) scale(1.1) rotate(-10deg);
+            }
+            45% {
+                transform: translate(-50%, -50%) scale(1) rotate(5deg);
+            }
+            85% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1) rotate(0deg);
+            }
+            100% {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.8) rotate(180deg);
+            }
+        }
+
+        /* Texto de celebración */
+        .celebration-text {
+            position: absolute;
+            bottom: -60px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(45deg, #ff0050, #ff4081);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            white-space: nowrap;
+            border: 3px solid #fff;
+            box-shadow: 0 4px 15px rgba(255, 0, 80, 0.4);
+            opacity: 0;
+        }
+
+        .celebration-text.showing {
+            animation: celebrationTextShow 4s ease-in-out;
+        }
+
+        @keyframes celebrationTextShow {
+            0% {
+                opacity: 0;
+                transform: translateX(-50%) translateY(20px) scale(0.8);
+            }
+            15% {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0) scale(1.1);
+            }
+            25% {
+                transform: translateX(-50%) translateY(0) scale(1);
+            }
+            85% {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0) scale(1);
+            }
+            100% {
+                opacity: 0;
+                transform: translateX(-50%) translateY(-20px) scale(0.8);
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Overlay de chat transparente -->
+    <div class="chat-overlay" id="chatOverlay">
+        <!-- Los mensajes aparecerán aquí -->
+    </div>
+
+    <!-- Los patitos se crearán dinámicamente con JavaScript -->
+
+    <!-- ANIMACIÓN DE CELEBRACIÓN CENTRAL -->
+    <div class="celebration-animation" id="celebrationAnimation">
+        <img src="bailando.gif" alt="Celebración">
+        <div class="celebration-text" id="celebrationText">¡100 LIKES!</div>
+    </div>
+
+    <!-- Panel de prueba (para desarrollo) -->
+    <div class="test-panel">
+        <h3>🧪 Panel de Prueba</h3>
+        <button class="test-btn" onclick="sendTestMessage('comment')">💬 Comentario (sin patito)</button>
+        <button class="test-btn" onclick="sendTestMessage('join')">👋 Usuario se une (sin patito)</button>
+        <button class="test-btn" onclick="sendTestMessage('like')" style="background: linear-gradient(45deg, #e91e63, #ff4081);">❤️ Like (CON PATITO)</button>
+        <button class="test-btn" onclick="sendTestMessage('gift')" style="background: linear-gradient(45deg, #ff9800, #ffb74d);">🎁 Regalo (CON PATITO)</button>
+        <button class="test-btn" onclick="sendTestMessage('follow')" style="background: linear-gradient(45deg, #9c27b0, #ba68c8);">➕ Seguidor (CON PATITO)</button>
+        <button class="test-btn" onclick="sendTestMessage('share')">🔄 Compartir (sin patito)</button>
+        <button class="test-btn" onclick="triggerCelebration(100)" style="background: linear-gradient(45deg, #4caf50, #8bc34a); font-size: 0.85rem;">🎉 CELEBRACIÓN 100</button>
+        <button class="test-btn" onclick="triggerCelebration(200); triggerCelebration(300);" style="background: linear-gradient(45deg, #ff5722, #ff8a65); font-size: 0.8rem;">🎊 PRUEBA COLA (200+300)</button>
+        <button class="test-btn" onclick="clearCelebrations()" style="background: #9e9e9e; font-size: 0.8rem;">🧹 Limpiar celebraciones</button>
+        <button class="test-btn" onclick="clearMessages()" style="background: #f44336;">🗑️ Limpiar mensajes</button>
+    </div>
+
+    <script>
+        let messageCounter = 0;
+        let duckCounter = 0; // Contador para patitos únicos
+        let totalLikes = 0; // Contador total de likes para celebración
+        let celebrationInProgress = false; // Flag para evitar celebraciones simultáneas
+        let celebrationQueue = []; // Cola de celebraciones pendientes
+        const maxMessages = 8; // Máximo de mensajes visibles
+        const SERVER_URL = 'http://localhost:8080';
+
+        // Función para obtener mensajes del servidor
+        async function fetchMessages() {
+            try {
+                const response = await fetch(`${SERVER_URL}/messages`);
+                if (response.ok) {
+                    const messages = await response.json();
+                    messages.forEach(message => {
+                        addMessage(message.type, message.username, message.content, message.icon);
+                        
+                        // Si es un like, verificar celebración
+                        if (message.type === 'like' && message.totalLikes) {
+                            checkCelebration(message.totalLikes);
+                        }
+                    });
+                }
+            } catch (error) {
+                // Silenciar errores de conexión cuando el servidor no esté disponible
+                console.log('Esperando conexión con TikTok Monitor...');
+            }
+        }
+
+        // Obtener mensajes cada 100ms para respuesta rápida
+        setInterval(fetchMessages, 100);
+
+        // Datos de prueba
+        const testUsers = ['María123', 'JuanGamer', 'Ana_2024', 'Pedro_Pro', 'Sofia_Live'];
+        const testComments = [
+            '¡Hola! ¿Cómo están?',
+            'Saludos desde México 🇲🇽',
+            'Me encanta este stream',
+            'Súper entretenido',
+            'Primera vez aquí',
+            '¡Increíble contenido!',
+            'Sigue así 💪'
+        ];
+        const testGifts = ['Rosa', 'Corazón', 'Estrella', 'Corona', 'Diamante'];
+
+        // Función para enviar mensaje de prueba
+        function sendTestMessage(type) {
+            const user = testUsers[Math.floor(Math.random() * testUsers.length)];
+            let content = '';
+            let icon = '';
+
+            switch(type) {
+                case 'comment':
+                    content = testComments[Math.floor(Math.random() * testComments.length)];
+                    icon = '💬';
+                    break;
+                case 'join':
+                    content = 'se unió al stream';
+                    icon = '👋';
+                    break;
+                case 'like':
+                    const likes = Math.floor(Math.random() * 10 + 1);
+                    content = `dio ${likes} likes`;
+                    icon = '❤️';
+                    break;
+                case 'gift':
+                    const gift = testGifts[Math.floor(Math.random() * testGifts.length)];
+                    const count = Math.floor(Math.random() * 5 + 1);
+                    content = `envió ${count}x ${gift}`;
+                    icon = '🎁';
+                    break;
+                case 'follow':
+                    content = 'comenzó a seguirte';
+                    icon = '➕';
+                    break;
+                case 'share':
+                    content = 'compartió el stream';
+                    icon = '🔄';
+                    break;
+            }
+
+            addMessage(type, user, content, icon);
+        }
+
+        // Función para agregar mensaje al overlay
+        function addMessage(type, username, content, icon) {
+            const chatOverlay = document.getElementById('chatOverlay');
+            
+            // SOLO ACTIVAR PATITO PARA: likes, regalos y seguidores
+            if (type === 'like' || type === 'gift' || type === 'follow') {
+                triggerDuckPush(username); // Solo el nombre del usuario
+            }
+            
+            // Crear elemento del mensaje IGUAL AL TERMINAL
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type} being-pushed`; // Agregar clase de empujado
+            
+            // FORMATO EXACTO DEL TERMINAL: [TikTok] 💬 Usuario: mensaje
+            let displayText = '';
+            if (type === 'comment') {
+                displayText = `<span style="color: #00bcd4;">[TikTok]</span> <span style="color: #00bcd4;">${icon}</span> <span style="color: #ffeb3b;">${username}</span>: ${content}`;
+            } else if (type === 'join') {
+                displayText = `<span style="color: #4caf50;">[TikTok]</span> <span style="color: #4caf50;">${icon}</span> <span style="color: #ffeb3b;">${username}</span> ${content}`;
+            } else if (type === 'like') {
+                displayText = `<span style="color: #e91e63;">[TikTok]</span> <span style="color: #e91e63;">${icon}</span> <span style="color: #ffeb3b;">${username}</span> ${content}`;
+            } else if (type === 'gift') {
+                displayText = `<span style="color: #ff9800;">[TikTok]</span> <span style="color: #ff9800;">${icon}</span> <span style="color: #ffeb3b;">${username}</span> ${content}`;
+            } else if (type === 'follow') {
+                displayText = `<span style="color: #9c27b0;">[TikTok]</span> <span style="color: #9c27b0;">${icon}</span> <span style="color: #ffeb3b;">${username}</span> ${content}`;
+            } else if (type === 'share') {
+                displayText = `<span style="color: #2196f3;">[TikTok]</span> <span style="color: #2196f3;">${icon}</span> <span style="color: #ffeb3b;">${username}</span> ${content}`;
+            } else if (type === 'system') {
+                displayText = `<span style="color: #9e9e9e;">[Sistema]</span> <span style="color: #9e9e9e;">${icon}</span> <span style="color: #81c784;">${username}</span>: ${content}`;
+            }
+            
+            messageDiv.innerHTML = `<div class="message-content">${displayText}</div>`;
+
+            // Agregar al final
+            chatOverlay.appendChild(messageDiv);
+
+            // Eliminar mensajes antiguos si hay demasiados
+            const messages = chatOverlay.querySelectorAll('.message');
+            if (messages.length > maxMessages) {
+                const oldMessage = messages[0];
+                oldMessage.classList.add('fade-out');
+                setTimeout(() => {
+                    if (oldMessage.parentNode) {
+                        oldMessage.parentNode.removeChild(oldMessage);
+                    }
+                }, 500);
+            }
+
+            // Auto-eliminar mensaje después de 15 segundos
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.classList.add('fade-out');
+                    setTimeout(() => {
+                        if (messageDiv.parentNode) {
+                            messageDiv.parentNode.removeChild(messageDiv);
+                        }
+                    }, 500);
+                }
+            }, 15000);
+        }
+
+        // Función para activar la animación del patito
+        function triggerDuckPush(username) {
+            // CADA MENSAJE CREA SU PROPIO PATITO INDEPENDIENTE
+            // Esto permite que múltiples patitos aparezcan simultáneamente
+            // sin interrumpir las animaciones de otros patitos
+            
+            duckCounter++;
+            const duckId = `duck-${duckCounter}`;
+            
+            // Crear el elemento del patito
+            const duckDiv = document.createElement('div');
+            duckDiv.className = 'duck-pusher';
+            duckDiv.id = duckId;
+            
+            // Variar la altura para evitar solapamiento (5 niveles rotativos)
+            const randomHeight = 40 + (duckCounter % 5) * 30; // 40, 70, 100, 130, 160px rotando
+            duckDiv.style.bottom = randomHeight + 'px';
+            
+            // Crear la imagen del patito
+            const duckImg = document.createElement('img');
+            duckImg.src = 'pato.gif';
+            duckImg.alt = 'Patito empujando';
+            
+            // Crear la etiqueta del usuario
+            const userLabel = document.createElement('div');
+            userLabel.className = 'duck-user-label';
+            userLabel.textContent = username;
+            
+            // Ensamblar el patito
+            duckDiv.appendChild(duckImg);
+            duckDiv.appendChild(userLabel);
+            
+            // Agregar al DOM
+            document.body.appendChild(duckDiv);
+            
+            // Iniciar animación después de un pequeño delay
+            setTimeout(() => {
+                duckDiv.classList.add('pushing');
+                userLabel.classList.add('showing');
+            }, 50);
+            
+            // Remover el patito después de completar la animación
+            setTimeout(() => {
+                if (duckDiv.parentNode) {
+                    duckDiv.parentNode.removeChild(duckDiv);
+                }
+            }, 5100); // 5 segundos de animación + 100ms extra para seguridad
+            
+            // Limpieza adicional de patitos huérfanos cada 10 patitos
+            if (duckCounter % 10 === 0) {
+                cleanupOldDucks();
+            }
+        }
+        
+        // Función para activar celebración
+        function triggerCelebration(likes) {
+            // Si ya hay una celebración en progreso, agregar a la cola
+            if (celebrationInProgress) {
+                celebrationQueue.push(likes);
+                console.log(`🎉 Celebración de ${likes} likes agregada a la cola`);
+                return;
+            }
+            
+            // Marcar que una celebración está en progreso
+            celebrationInProgress = true;
+            
+            const celebrationDiv = document.getElementById('celebrationAnimation');
+            const celebrationText = document.getElementById('celebrationText');
+            
+            // Actualizar el texto con el número de likes
+            celebrationText.textContent = `¡${likes} LIKES!`;
+            
+            // FORZAR reset completo de las animaciones
+            celebrationDiv.classList.remove('celebrating');
+            celebrationText.classList.remove('showing');
+            
+            // Forzar reflow para asegurar que las clases se quiten
+            celebrationDiv.offsetHeight;
+            celebrationText.offsetHeight;
+            
+            // Iniciar animación después de un pequeño delay para asegurar reset
+            setTimeout(() => {
+                celebrationDiv.classList.add('celebrating');
+                celebrationText.classList.add('showing');
+                console.log(`🎉 ¡CELEBRACIÓN INICIADA! ${likes} likes - Duración: 4 segundos`);
+            }, 100);
+            
+            // Quitar las clases y liberar el flag DESPUÉS de 4 segundos completos
+            setTimeout(() => {
+                celebrationDiv.classList.remove('celebrating');
+                celebrationText.classList.remove('showing');
+                celebrationInProgress = false;
+                console.log(`✅ Celebración de ${likes} likes COMPLETADA`);
+                
+                // Procesar siguiente celebración en cola si existe
+                if (celebrationQueue.length > 0) {
+                    const nextCelebration = celebrationQueue.shift();
+                    console.log(`⏭️ Iniciando siguiente celebración: ${nextCelebration} likes`);
+                    setTimeout(() => {
+                        triggerCelebration(nextCelebration);
+                    }, 500); // Pequeña pausa entre celebraciones
+                }
+            }, 4200); // 4 segundos + 200ms de margen de seguridad
+        }
+
+        // Función para verificar si necesitamos celebrar
+        function checkCelebration(likes) {
+            // Verificar cada 100 likes
+            if (likes > 0 && likes % 100 === 0) {
+                console.log(`🎯 Milestone alcanzado: ${likes} likes - Activando celebración`);
+                triggerCelebration(likes);
+            }
+        }
+
+        // Función para limpiar todas las celebraciones (útil para desarrollo)
+        function clearCelebrations() {
+            celebrationInProgress = false;
+            celebrationQueue = [];
+            const celebrationDiv = document.getElementById('celebrationAnimation');
+            const celebrationText = document.getElementById('celebrationText');
+            celebrationDiv.classList.remove('celebrating');
+            celebrationText.classList.remove('showing');
+            console.log('🧹 Todas las celebraciones limpiadas');
+        }
+
+        // Función para limpiar patitos que puedan haber quedado huérfanos
+        function cleanupOldDucks() {
+            const allDucks = document.querySelectorAll('.duck-pusher');
+            allDucks.forEach(duck => {
+                // Si el patito existe por más de 5 segundos, eliminarlo
+                if (duck.id && duck.id.startsWith('duck-')) {
+                    const duckNumber = parseInt(duck.id.split('-')[1]);
+                    if (duckCounter - duckNumber > 20) { // Si es muy viejo
+                        if (duck.parentNode) {
+                            duck.parentNode.removeChild(duck);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Función para limpiar todos los mensajes
+        function clearMessages() {
+            const chatOverlay = document.getElementById('chatOverlay');
+            const messages = chatOverlay.querySelectorAll('.message');
+            
+            messages.forEach((message, index) => {
+                setTimeout(() => {
+                    message.classList.add('fade-out');
+                    setTimeout(() => {
+                        if (message.parentNode) {
+                            message.parentNode.removeChild(message);
+                        }
+                    }, 500);
+                }, index * 100);
+            });
+        }
+
+        // Eventos de teclado para pruebas rápidas
+        document.addEventListener('keydown', function(e) {
+            switch(e.key) {
+                case '1':
+                    sendTestMessage('comment');
+                    break;
+                case '2':
+                    sendTestMessage('join');
+                    break;
+                case '3':
+                    sendTestMessage('like');
+                    break;
+                case '4':
+                    sendTestMessage('gift');
+                    break;
+                case '5':
+                    sendTestMessage('follow');
+                    break;
+                case '6':
+                    sendTestMessage('share');
+                    break;
+                case '9':
+                    triggerCelebration(100); // Tecla 9 para probar celebración
+                    break;
+                case '0':
+                    clearCelebrations(); // Tecla 0 para limpiar celebraciones
+                    break;
+                case 'c':
+                case 'C':
+                    clearMessages();
+                    break;
+            }
+        });
+
+        // Función para conectar con datos reales (placeholder)
+        function connectToTikTok(username) {
+            // Aquí se conectaría con el backend/WebSocket
+            console.log(`Conectando a TikTok: ${username}`);
+        }
+
+        // Función para recibir mensaje real (placeholder)
+        function onTikTokMessage(data) {
+            // Procesar mensaje real de TikTok
+            addMessage(data.type, data.username, data.content, data.icon);
+        }
+
+        // Mensaje de bienvenida
+        console.log('🔴 TikTok Chat Overlay cargado');
+        console.log('Conectando con TikTok Monitor en puerto 8080...');
+        console.log('Teclas de prueba: 1=Comentario, 2=Join, 3=Like, 4=Regalo, 5=Follow, 6=Share, 9=Celebración, 0=Limpiar celebraciones, C=Limpiar');
+        
+        // Mostrar estado de conexión
+        setTimeout(() => {
+            addMessage('system', 'Sistema', 'Overlay iniciado - Esperando conexión con TikTok Monitor', '🔄');
+        }, 500);
+    </script>
+</body>
+</html>
